@@ -1,0 +1,23 @@
+# build
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+node_modules/
+.angular/
+src/Lens.Api/wwwroot/
+
+# local data and tools (downloaded by scripts/)
+data/
+tools/ffmpeg/
+tools/*.zip
+models/*.onnx
+*.mp4
+*.ts
+*.mkv
+!samples/README.md
+
+# secrets
+.env
+appsettings.*.local.json
