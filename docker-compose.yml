@@ -1,0 +1,52 @@
+services:
+  db:
+    # TimescaleDB HA image ships PostgreSQL 16 with timescaledb and pgvector preinstalled.
+    image: timescale/timescaledb-ha:pg16
+    environment:
+      POSTGRES_USER: lens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lens}
+      POSTGRES_DB: lens
+    ports:
+      - "5433:5432"
+    volumes:
+      - lens-db:/home/postgres/pgdata/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lens -d lens"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mediamtx:
+    # WebRTC gateway for live playback. Lens registers a path per camera through its API.
+    image: bluenviron/mediamtx:latest
+    environment:
+      MTX_API: "yes"
+      MTX_APIADDRESS: ":9997"
+      MTX_WEBRTCADDITIONALHOSTS: ${LENS_PUBLIC_HOST:-localhost}
+    network_mode: host   # WebRTC needs the UDP port reachable as-is; host networking is the simplest correct choice
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Lens.Api/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      LENS_CONNECTION_STRING: Host=db;Port=5432;Database=lens;Username=lens;Password=${POSTGRES_PASSWORD:-lens}
+      LENS_FFMPEG_DIR: /usr/bin
+      LENS_MEDIAMTX_API: http://host.docker.internal:9997
+      LENS_MEDIAMTX_WEBRTC: http://${LENS_PUBLIC_HOST:-localhost}:8889
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      Lens__Model: ${LENS_MODEL:-claude-opus-5}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Mount the folder that holds the indexed videos at the same path the indexer saw, so /api/frame can read them.
+      - ${LENS_VIDEO_DIR:-./samples}:${LENS_VIDEO_DIR:-./samples}:ro
+    ports:
+      - "8080:8080"
+
+volumes:
+  lens-db:
