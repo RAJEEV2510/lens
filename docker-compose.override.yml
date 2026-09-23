@@ -1,0 +1,39 @@
+# Local-only workaround (not part of the upstream repo).
+# This machine's /etc/docker/daemon.json sets "default-runtime": "nvidia" but /usr/bin/nvidia-container-runtime
+# is not installed, so containers fail to start. Pin the Lens services to the standard runc runtime instead.
+# Delete this file once the nvidia container toolkit is installed or the default runtime is changed back to runc.
+services:
+  db:
+    runtime: runc
+  mediamtx:
+    runtime: runc
+    environment:
+      # MediaMTX only lets localhost use its API by default; the api container calls it from a Docker network.
+      MTX_AUTHINTERNALUSERS_1_IPS: 127.0.0.1,::1,172.16.0.0/12
+  api:
+    runtime: runc
+    depends_on:
+      - ollama
+    environment:
+      # Answer questions with the database planner first, then the local Ollama model. Never Claude.
+      LENS_PROVIDER: auto
+      LENS_OLLAMA_URL: http://ollama:11434
+      LENS_OLLAMA_MODEL: qwen2.5:3b
+      ANTHROPIC_API_KEY: ""
+      # The image does not ship the YOLO model; use the one in ./models.
+      LENS_MODEL_PATH: /models/yolov10n.onnx
+      LENS_FACE_MODEL_PATH: /models/yolov11n-face.onnx
+    volumes:
+      - ./models:/models:ro
+
+  # Local open model server (CPU). Models persist in the ollama-models volume.
+  ollama:
+    image: ollama/ollama:latest
+    runtime: runc
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  ollama-models:
