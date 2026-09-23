@@ -24,6 +24,7 @@ public sealed class LivePipeline
     private readonly IDetectionStore _store;
     private readonly FrameArchive _archive;
     private readonly string _modelPath;
+    private readonly string? _faceModelPath;
     private readonly string? _ffmpegDir;
     private readonly ILogger _log;
 
@@ -34,11 +35,12 @@ public sealed class LivePipeline
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(60);
     public double ArchiveEverySeconds { get; init; } = 1.0;
 
-    public LivePipeline(IDetectionStore store, FrameArchive archive, string modelPath, string? ffmpegDir = null, ILogger? log = null)
+    public LivePipeline(IDetectionStore store, FrameArchive archive, string modelPath, string? ffmpegDir = null, ILogger? log = null, string? faceModelPath = null)
     {
         _store = store;
         _archive = archive;
         _modelPath = modelPath;
+        _faceModelPath = faceModelPath;
         _ffmpegDir = ffmpegDir;
         _log = log ?? NullLogger.Instance;
     }
@@ -67,7 +69,7 @@ public sealed class LivePipeline
         };
         var videoId = await _store.UpsertVideoAsync(video, clearDetections: false, ct);
 
-        using var detector = new YoloDetector(new DetectorOptions { ModelPath = _modelPath, ConfidenceThreshold = source.Confidence });
+        using var detector = new DetectorSet(_modelPath, _faceModelPath, source.Confidence);
         var letterbox = new Letterbox(probe.Width, probe.Height, detector.InputSize);
         var sampler = new FrameSampler(_ffmpegDir);
 

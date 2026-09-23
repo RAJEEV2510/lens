@@ -29,7 +29,7 @@ Console.WriteLine($"video   : {opts.VideoPath}");
 
 await store.EnsureSchemaAsync(cts.Token);
 
-var pipeline = new IndexingPipeline(store, opts.ModelPath, opts.FFmpegDir);
+var pipeline = new IndexingPipeline(store, opts.ModelPath, opts.FFmpegDir, IndexingPipeline.FindDefaultFaceModel());
 var progress = new Progress<IndexProgress>(p =>
     Console.WriteLine($"  {p.Percent,5:0.0}%  t={p.VideoSeconds,7:0.0}s  frames={p.Frames,6}  detections={p.Detections,7}  {p.FramesPerSecond:0.0} fps"));
 

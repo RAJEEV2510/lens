@@ -145,6 +145,7 @@ export interface Status {
 
 export const CLASS_COLOURS: Record<string, string> = {
   person: '#ff4d4d', car: '#4dff88', truck: '#ffd24d', bus: '#4dc3ff', motorcycle: '#ff8c4d', bicycle: '#c84dff', dog: '#ff4dc3',
+  face: '#4dfff0',
 };
 
 export const colourFor = (cls: string) => CLASS_COLOURS[cls] ?? '#ffffff';

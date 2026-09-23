@@ -14,7 +14,7 @@ COPY src/Lens.Api/Lens.Api.csproj src/Lens.Api/
 RUN dotnet restore src/Lens.Api/Lens.Api.csproj
 COPY src/Lens.Core src/Lens.Core
 COPY src/Lens.Api src/Lens.Api
-COPY --from=web /web/dist src/Lens.Api/wwwroot
+COPY --from=web /web/dist/browser src/Lens.Api/wwwroot
 RUN dotnet publish src/Lens.Api/Lens.Api.csproj -c Release -o /app --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0

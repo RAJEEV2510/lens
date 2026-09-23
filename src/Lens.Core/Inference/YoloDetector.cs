@@ -13,6 +13,8 @@ public sealed record DetectorOptions
     public float IouThreshold { get; init; } = 0.5f;
     /// <summary>COCO class ids to keep. Null keeps everything.</summary>
     public HashSet<int>? KeepClasses { get; init; }
+    /// <summary>Added to the model's class ids, so a single-class model (faces) can sit after the COCO ids.</summary>
+    public int ClassOffset { get; init; }
 }
 
 /// <summary>
@@ -74,7 +76,8 @@ public sealed class YoloDetector : IDisposable
         {
             var (x1, y1, x2, y2) = letterbox.ToNormalised(b.X1, b.Y1, b.X2, b.Y2);
             if (x2 - x1 <= 0 || y2 - y1 <= 0) continue;
-            list.Add(new Detection(videoId, frame.Index, frame.TimestampSeconds, b.ClassId, CocoLabels.Name(b.ClassId), b.Score, x1, y1, x2, y2));
+            var classId = b.ClassId + _options.ClassOffset;
+            list.Add(new Detection(videoId, frame.Index, frame.TimestampSeconds, classId, CocoLabels.Name(classId), b.Score, x1, y1, x2, y2));
         }
         return list;
     }
