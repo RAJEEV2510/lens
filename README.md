@@ -155,7 +155,8 @@ A local file path can also be added as a source; it is read at real-time pace an
 | `POST /api/videos/upload` (multipart: `file`, `camera`, `startedAt`, `fps`) | Queue a video for indexing, returns a job |
 | `GET /api/jobs/{id}` | Indexing progress |
 | `POST /api/ask` `{ "question": "..." }` | Answer, hits, the store calls made, and `provider` (`local`, `ollama:<model>` or `claude:<model>`) |
-| `GET /api/ask/providers` | Which answerers are available: the local model's reachability and whether a Claude key is set |
+| `GET /api/ask/providers` | Which answerers are available: the local model's reachability, whether a Claude key is set, RAG index state |
+| `POST /api/rag/index?rebuild=false`, `GET /api/rag/status` | Build the optional RAG vector index in the background; poll progress |
 
 ## How the question box works
 
@@ -176,6 +177,28 @@ forced to `local`, `ollama` or `claude`.
 3. **Claude.** Only if `ANTHROPIC_API_KEY` is set. Same tools, same loop, `LensAgent`.
 
 The UI shows which one answered and every store call it made.
+
+### Optional: RAG mode
+
+The Ask page has a switch: **Database first** (the default above) or **RAG (embeddings)**. RAG is classic retrieval-augmented
+generation over the detections:
+
+1. **Index.** Every merged event becomes one sentence, for example *"A large bus on camera atcc-junction (samples_atcc_60s.mp4) at
+   0:05 into the video, 18:00:05 on Tuesday 22 September 2026, in view for 3 seconds (7 sightings, 83% confidence), in the middle
+   centre of the frame."* Each sentence is embedded with a local open embedding model through Ollama (`nomic-embed-text`,
+   `Lens:EmbedModel`, 274 MB) and stored in a small file-backed vector index (`data/lens-vectors.jsonl` + `.f32`,
+   `Lens:VectorIndexPath`). Click **Build index** on the Ask page or `POST /api/rag/index`; it is incremental, `?rebuild=true`
+   starts over. `GET /api/rag/status` reports progress.
+2. **Retrieve.** The question is embedded the same way and the closest `Lens:RagTopK` events (default 12) are pulled by cosine
+   similarity, optionally restricted to one video first.
+3. **Generate.** The local chat model writes an answer from those events only, and says so when they do not contain one. Without a
+   chat model the retrieved events are returned as the answer.
+
+When to use which: RAG suits fuzzy questions ("anything unusual near the gate in the evening?"). For exact counts and time
+windows the database-first mode is more accurate, because similarity search returns the closest events, not all of them. The
+choice is per question (`"mode": "rag"` on `POST /api/ask`) or a server-wide default (`Lens:Provider = rag`). The same
+`FileVectorIndex` interface is where a pgvector implementation or CLIP image embeddings per crop would go, which is what makes
+"white van" style questions possible; that is not built yet.
 
 ### Training your own model
 
@@ -220,6 +243,7 @@ Search over the JSON store returns in single-digit milliseconds at this size. Po
 - [ ] CLIP embeddings per detection crop, pgvector search, so "white van" and "looks like this" work
 - [x] Ollama provider so the question box runs offline with a local model
 - [x] Database-first planner so common questions never touch a model
+- [x] Optional RAG mode: event sentences embedded locally, similarity retrieval, local model writes the answer
 - [ ] Fine-tune a 1.5B model on the question log and ship it as the default local model
 - [ ] Amazon Bedrock provider (same agent, different client)
 - [ ] Eval suite: 50 questions with known answers, published accuracy
@@ -232,8 +256,9 @@ Search over the JSON store returns in single-digit milliseconds at this size. Po
 dotnet test
 ```
 
-30 unit tests cover the letterbox maths, NMS, both YOLO output formats, search grouping and filters on the JSON store, the frame archive,
-and the no-model question planner (intents, synonyms, seconds and clock windows, camera scoping, unsupported concepts).
+34 unit tests cover the letterbox maths, NMS, both YOLO output formats, search grouping and filters on the JSON store, the frame archive,
+the no-model question planner (intents, synonyms, seconds and clock windows, camera scoping, unsupported concepts), and the RAG path
+(event sentences, the file vector index, incremental builds).
 CI also applies the schema to a real TimescaleDB container and builds the Docker image.
 
 ## Licence

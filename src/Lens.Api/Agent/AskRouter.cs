@@ -6,13 +6,15 @@ namespace Lens.Api.Agent;
 
 public sealed record AskRouterOptions
 {
-    /// <summary>auto: local planner, then Ollama, then Claude. Or force one of local | ollama | claude.</summary>
+    /// <summary>auto: local planner, then Ollama, then Claude. Or force one of local | ollama | claude | rag.</summary>
     public string Provider { get; init; } = "auto";
+    /// <summary>How many events RAG retrieves per question.</summary>
+    public int RagTopK { get; init; } = 12;
     /// <summary>JSONL file every question and its answer plan are appended to, for training your own model later. Null disables.</summary>
     public string? LogPath { get; init; }
 }
 
-public sealed record ProviderStatus(string Mode, bool Local, OllamaStatus Ollama, ClaudeStatus Claude);
+public sealed record ProviderStatus(string Mode, bool Local, OllamaStatus Ollama, ClaudeStatus Claude, RagStatus Rag);
 public sealed record OllamaStatus(string Url, string Model, bool Available, string? Reason);
 public sealed record ClaudeStatus(string Model, bool Configured);
 
@@ -26,6 +28,7 @@ public sealed class AskRouter
     private readonly QuestionPlanner _planner;
     private readonly OllamaAgent _ollama;
     private readonly LensAgent _claude;
+    private readonly RagAnswerer _rag;
     private readonly AskRouterOptions _options;
     private readonly AgentOptions _claudeOptions;
     private readonly ILogger<AskRouter> _log;
@@ -37,11 +40,12 @@ public sealed class AskRouter
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    public AskRouter(QuestionPlanner planner, OllamaAgent ollama, LensAgent claude, AskRouterOptions options, AgentOptions claudeOptions, ILogger<AskRouter> log)
+    public AskRouter(QuestionPlanner planner, OllamaAgent ollama, LensAgent claude, RagAnswerer rag, AskRouterOptions options, AgentOptions claudeOptions, ILogger<AskRouter> log)
     {
         _planner = planner;
         _ollama = ollama;
         _claude = claude;
+        _rag = rag;
         _options = options;
         _claudeOptions = claudeOptions;
         _log = log;
@@ -56,14 +60,23 @@ public sealed class AskRouter
         var (ok, reason) = await _ollama.ProbeAsync(ct);
         return new ProviderStatus(_options.Provider, true,
             new OllamaStatus(_ollama.Options.Url, _ollama.Options.Model, ok, reason),
-            new ClaudeStatus(_claudeOptions.Model, ClaudeConfigured));
+            new ClaudeStatus(_claudeOptions.Model, ClaudeConfigured),
+            await _rag.StatusAsync(ct));
     }
 
-    public async Task<AskResult> AskAsync(string question, int? videoId, CancellationToken ct)
+    /// <param name="modeOverride">Per-question switch from the UI: auto | local | ollama | claude | rag. Null uses the configured default.</param>
+    public async Task<AskResult> AskAsync(string question, int? videoId, string? modeOverride, CancellationToken ct)
     {
-        var mode = _options.Provider.ToLowerInvariant();
+        var mode = (string.IsNullOrWhiteSpace(modeOverride) ? _options.Provider : modeOverride).Trim().ToLowerInvariant();
         var sw = System.Diagnostics.Stopwatch.StartNew();
         AskResult result;
+
+        if (mode == "rag")
+        {
+            result = await _rag.AskAsync(question, videoId, _options.RagTopK, ct);
+            await LogAsync(question, videoId, result, ct);
+            return result;
+        }
 
         if (mode is "auto" or "local")
         {

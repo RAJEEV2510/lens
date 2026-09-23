@@ -1,7 +1,7 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
-import { AskResult, ProviderStatus, ClassCount, DetectionHit, IndexJob, SearchParams, Source, SourceRequest, Status, VideoInfo } from './models';
+import { AskResult, ProviderStatus, RagStatus, ClassCount, DetectionHit, IndexJob, SearchParams, Source, SourceRequest, Status, VideoInfo } from './models';
 
 @Injectable({ providedIn: 'root' })
 export class ApiService {
@@ -24,9 +24,12 @@ export class ApiService {
     return this.http.get<ClassCount[]>('/api/detections/counts', { params });
   }
 
-  ask(question: string, videoId?: number): Observable<AskResult> {
-    return this.http.post<AskResult>('/api/ask', { question, videoId });
+  ask(question: string, videoId?: number, mode?: string): Observable<AskResult> {
+    return this.http.post<AskResult>('/api/ask', { question, videoId, mode });
   }
+
+  ragStatus(): Observable<RagStatus> { return this.http.get<RagStatus>('/api/rag/status'); }
+  ragIndex(rebuild = false): Observable<unknown> { return this.http.post(`/api/rag/index?rebuild=${rebuild}`, {}); }
 
   askProviders(): Observable<ProviderStatus> { return this.http.get<ProviderStatus>('/api/ask/providers'); }
 

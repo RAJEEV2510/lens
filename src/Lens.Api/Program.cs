@@ -8,6 +8,7 @@ using Lens.Core.Indexing;
 using Lens.Core.Models;
 using Lens.Core.Inference;
 using Lens.Core.Query;
+using Lens.Core.Rag;
 using Lens.Core.Storage;
 using Lens.Core.Video;
 using Microsoft.AspNetCore.Http.Features;
@@ -44,9 +45,19 @@ builder.Services.AddHttpClient<OllamaAgent>();
 builder.Services.AddSingleton<OllamaAgent>(sp => new OllamaAgent(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OllamaAgent)),
     sp.GetRequiredService<AgentTools>(), sp.GetRequiredService<OllamaOptions>(), sp.GetRequiredService<ILogger<OllamaAgent>>()));
+// Optional RAG: event descriptions embedded by a local model, searched by similarity. Off the default path; the UI has a switch.
+var embedModel = builder.Configuration["EMBED_MODEL"] ?? lens["EmbedModel"] ?? "nomic-embed-text";
+var vectorPath = Path.GetFullPath(builder.Configuration["VECTOR_INDEX_PATH"] ?? lens["VectorIndexPath"] ?? "../../data/lens-vectors", builder.Environment.ContentRootPath);
+builder.Services.AddHttpClient(nameof(OllamaEmbedder));
+builder.Services.AddSingleton<IEmbedder>(sp => new OllamaEmbedder(
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OllamaEmbedder)), sp.GetRequiredService<OllamaOptions>().Url, embedModel));
+builder.Services.AddSingleton(new FileVectorIndex(vectorPath));
+builder.Services.AddSingleton<RagIndexer>();
+builder.Services.AddSingleton<RagAnswerer>();
 builder.Services.AddSingleton(new AskRouterOptions
 {
     Provider = builder.Configuration["PROVIDER"] ?? lens["Provider"] ?? "auto",
+    RagTopK = int.TryParse(lens["RagTopK"], out var topK) ? topK : 12,
     LogPath = (builder.Configuration["ASK_LOG_PATH"] ?? lens["AskLogPath"]) is { Length: > 0 } lp ? Path.GetFullPath(lp, builder.Environment.ContentRootPath) : null,
 });
 builder.Services.AddSingleton<AskRouter>();
@@ -140,7 +151,7 @@ api.MapPost("/ask", async (AskRequest body, AskRouter router, CancellationToken 
     if (body.Question.Length > 1000) return Results.BadRequest(new { error = "question too long" });
     try
     {
-        var result = await router.AskAsync(body.Question.Trim(), body.VideoId, ct);
+        var result = await router.AskAsync(body.Question.Trim(), body.VideoId, body.Mode, ct);
         return Results.Ok(result);
     }
     catch (ProviderUnavailableException ex)
@@ -166,6 +177,17 @@ api.MapPost("/ask", async (AskRequest body, AskRouter router, CancellationToken 
         app.Logger.LogError(ex, "Claude API error");
         return Results.Json(new { error = "The Claude call failed.", detail = ex.Message }, statusCode: 502);
     }
+});
+
+// RAG index: build in the background, poll for progress. Incremental; rebuild=true starts from scratch.
+api.MapGet("/rag/status", async (RagAnswerer rag, CancellationToken ct) => Results.Ok(await rag.StatusAsync(ct)));
+
+api.MapPost("/rag/index", async (RagIndexer indexer, IEmbedder embedder, bool? rebuild, CancellationToken ct) =>
+{
+    var (ok, reason) = await embedder.ProbeAsync(ct);
+    if (!ok) return Results.Json(new { error = reason }, statusCode: 503);
+    var started = indexer.Start(rebuild ?? false);
+    return Results.Accepted("/api/rag/status", new { started, indexer.Progress });
 });
 
 // Upload a video and queue it for indexing. Returns the job id; poll /api/jobs/{id} for progress.
@@ -328,7 +350,7 @@ app.MapGet("/health", () => Results.Ok(new { ok = true, time = DateTimeOffset.Ut
 
 app.Run();
 
-public sealed record AskRequest(string Question, int? VideoId);
+public sealed record AskRequest(string Question, int? VideoId, string? Mode);
 
 public sealed record SourceRequest(string Url, string? Name, string? Camera, double? SampleFps, float? Confidence, bool? Simulate,
     string? DetectUrl, int? OverlayOffsetMs);

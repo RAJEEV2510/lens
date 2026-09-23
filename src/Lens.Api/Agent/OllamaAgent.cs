@@ -10,7 +10,7 @@ public sealed record OllamaOptions
     public string Url { get; init; } = "http://localhost:11434";
     public string Model { get; init; } = "qwen2.5:3b";
     public int MaxToolRounds { get; init; } = 6;
-    public int ContextTokens { get; init; } = 8192;
+    public int ContextTokens { get; init; } = 6144;
 }
 
 /// <summary>
@@ -89,8 +89,9 @@ public sealed class OllamaAgent
         var hits = new List<DetectionHit>();
 
         // Prefetch the inventory: one fewer round trip, and small models plan much better when they can see the video ids.
+        // One compact line per video rather than JSON: on a CPU every prompt token costs real time.
         var t0 = System.Diagnostics.Stopwatch.StartNew();
-        var (inventory, _) = await _tools.ExecuteAsync("list_videos", new Dictionary<string, JsonElement>(), ct);
+        var inventory = await _tools.InventoryTextAsync(ct);
         trace.Add(new ToolCallTrace("list_videos", JsonSerializer.SerializeToElement(new { prefetched = true }), inventory.Length, t0.Elapsed.TotalMilliseconds));
 
         var context = $"Current date/time: {DateTimeOffset.Now:yyyy-MM-dd HH:mm zzz}.";
@@ -98,7 +99,7 @@ public sealed class OllamaAgent
 
         var messages = new JsonArray
         {
-            new JsonObject { ["role"] = "system", ["content"] = SystemPrompt + "\n\nIndexed footage (JSON):\n" + inventory },
+            new JsonObject { ["role"] = "system", ["content"] = SystemPrompt + "\n\nIndexed footage (id | name | camera | length | starts | top classes):\n" + inventory },
             new JsonObject { ["role"] = "user", ["content"] = $"{context}\n\nQuestion: {question}" },
         };
         var tools = new JsonArray(AgentTools.Specs.Select(t => (JsonNode)new JsonObject
@@ -122,6 +123,7 @@ public sealed class OllamaAgent
             {
                 ["model"] = _options.Model,
                 ["stream"] = false,
+                ["keep_alive"] = "30m", // stay loaded between questions; reloading a 2 GB model costs 10+ seconds
                 ["options"] = new JsonObject { ["temperature"] = 0, ["num_ctx"] = _options.ContextTokens },
                 ["messages"] = messages.DeepClone(),
                 ["tools"] = tools.DeepClone(),
@@ -184,6 +186,30 @@ public sealed class OllamaAgent
 
         var unique = hits.GroupBy(h => (h.VideoId, h.ClassName, h.TimestampSeconds)).Select(g => g.First()).OrderBy(h => h.OccurredAt).ToList();
         return new AskResult(answer, unique, trace, stop, inTok, outTok, "ollama:" + _options.Model, sw.Elapsed.TotalMilliseconds);
+    }
+
+    /// <summary>One plain chat turn, no tools. Used by the RAG path to write an answer from retrieved events.</summary>
+    public async Task<(string Answer, long InputTokens, long OutputTokens, string Stop)> ChatAsync(string system, string user, CancellationToken ct)
+    {
+        var body = new JsonObject
+        {
+            ["model"] = _options.Model,
+            ["stream"] = false,
+            ["keep_alive"] = "30m",
+            ["options"] = new JsonObject { ["temperature"] = 0, ["num_ctx"] = _options.ContextTokens },
+            ["messages"] = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] = system },
+                new JsonObject { ["role"] = "user", ["content"] = user },
+            },
+        };
+        using var response = await _http.PostAsJsonAsync("api/chat", body, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"Ollama returned {(int)response.StatusCode}: {text}");
+        var reply = JsonNode.Parse(text)!;
+        var answer = reply["message"]?["content"]?.GetValue<string>()?.Trim() ?? "";
+        var stop = reply["done_reason"]?.GetValue<string>() is "length" ? "max_tokens" : "end_turn";
+        return (answer, reply["prompt_eval_count"]?.GetValue<long>() ?? 0, reply["eval_count"]?.GetValue<long>() ?? 0, stop);
     }
 
     private static Dictionary<string, JsonElement> ParseArguments(JsonNode? node)

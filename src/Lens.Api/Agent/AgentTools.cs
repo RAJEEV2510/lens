@@ -30,10 +30,11 @@ public sealed class AgentTools
     {
         ["video_id"] = Prop("integer", "Restrict to one video id from list_videos."),
         ["camera"] = Prop("string", "Restrict to one camera name."),
+        // No enum here on purpose: 80 names twice over is ~600 prompt tokens, which a CPU-bound local model pays for on every question.
         ["classes"] = JsonSerializer.SerializeToElement(new
         {
-            type = "array", items = new { type = "string", @enum = CocoLabels.Names },
-            description = "Class names to look for (COCO names plus \"face\"), e.g. [\"car\",\"truck\"]. Omit for all classes.",
+            type = "array", items = new { type = "string" },
+            description = "Class names to look for, lower case, e.g. [\"car\",\"truck\"]. COCO names plus \"face\"; common: person, car, truck, bus, motorcycle, bicycle, dog, cat, face. Omit for all classes.",
         }),
         ["from_seconds"] = Prop("number", "Only sightings at or after this many seconds into the video."),
         ["to_seconds"] = Prop("number", "Only sightings at or before this many seconds into the video."),
@@ -70,6 +71,21 @@ public sealed class AgentTools
         Description = t.Description,
         InputSchema = new() { Properties = new Dictionary<string, JsonElement>(t.Properties), Required = [] },
     }).ToList();
+
+    /// <summary>The footage inventory as one short line per video. About five times fewer tokens than the JSON list_videos returns.</summary>
+    public async Task<string> InventoryTextAsync(CancellationToken ct)
+    {
+        var videos = await _store.ListVideosAsync(ct);
+        if (videos.Count == 0) return "(nothing indexed yet)";
+        var lines = new List<string>();
+        foreach (var v in videos)
+        {
+            var classes = await _store.CountByClassAsync(new DetectionFilter { VideoId = v.Id }, ct);
+            var top = string.Join(" ", classes.Take(5).Select(c => $"{c.ClassName}={c.Count}"));
+            lines.Add($"{v.Id} | {v.Name}{(v.IsLive ? " (live)" : "")} | {v.Camera} | {(int)v.DurationSeconds}s | {v.StartedAt:yyyy-MM-dd HH:mm zzz} | {top}");
+        }
+        return string.Join("\n", lines);
+    }
 
     /// <summary>Runs a tool. Returns the JSON text for Claude and, for searches, the hits so the UI can render them.</summary>
     public async Task<(string Json, IReadOnlyList<DetectionHit> Hits)> ExecuteAsync(string name, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)

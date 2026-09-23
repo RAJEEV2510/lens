@@ -62,6 +62,17 @@ export interface ProviderStatus {
   local: boolean;
   ollama: { url: string; model: string; available: boolean; reason?: string | null };
   claude: { model: string; configured: boolean };
+  rag: RagStatus;
+}
+
+export type AskMode = 'auto' | 'rag';
+
+export interface RagStatus {
+  embedModel: string;
+  available: boolean;
+  reason?: string | null;
+  indexed: number;
+  progress: { videos: number; videosDone: number; events: number; embedded: number; running: boolean; error?: string | null; finishedAt?: string | null };
 }
 
 export type SourceStatus = 'connecting' | 'running' | 'reconnecting' | 'disabled' | 'stopped';
