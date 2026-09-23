@@ -60,6 +60,7 @@ public sealed class IndexWorker : BackgroundService
     private readonly IndexQueue _queue;
     private readonly IDetectionStore _store;
     private readonly string _modelPath;
+    private readonly string? _faceModelPath;
     private readonly string? _ffmpegDir;
     private readonly ILogger<IndexWorker> _log;
 
@@ -71,11 +72,12 @@ public sealed class IndexWorker : BackgroundService
         _ffmpegDir = config["FFMPEG_DIR"];
         _modelPath = config["MODEL_PATH"] ?? config["Lens:ModelPath"] ?? IndexingPipeline.FindDefaultModel()
                      ?? throw new InvalidOperationException("YOLO model not found. Run scripts/get-models.ps1 or set LENS_MODEL_PATH.");
+        _faceModelPath = config["FACE_MODEL_PATH"] ?? config["Lens:FaceModelPath"] ?? IndexingPipeline.FindDefaultFaceModel();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var pipeline = new IndexingPipeline(_store, _modelPath, _ffmpegDir);
+        var pipeline = new IndexingPipeline(_store, _modelPath, _ffmpegDir, _faceModelPath);
         await foreach (var job in _queue.ReadAllAsync(stoppingToken))
         {
             job.Status = JobStatus.Running;

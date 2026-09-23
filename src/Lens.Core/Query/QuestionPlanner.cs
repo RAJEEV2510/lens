@@ -17,7 +17,8 @@ public sealed record LocalAnswer(string Answer, IReadOnlyList<DetectionHit> Hits
 /// Answers the common question shapes straight from the detection store: what footage exists, how many of a class,
 /// when the first or last one was seen, show me X, was there any X, plus time windows in seconds or wall-clock.
 /// Anything it does not understand returns null so a model can take over. It knows only object classes, so questions
-/// about colour, plates, faces, speed or direction get an honest "not available" instead of a guess.
+/// about colour, plates, identities, speed or direction get an honest "not available" instead of a guess. Faces are a class
+/// (from the face model), so "how many faces" is answered; "who is that" is not.
 /// </summary>
 public sealed class QuestionPlanner
 {
@@ -99,6 +100,7 @@ public sealed class QuestionPlanner
         ["women"] = ["person"], ["someone"] = ["person"], ["anyone"] = ["person"], ["anybody"] = ["person"], ["somebody"] = ["person"],
         ["walker"] = ["person"], ["walkers"] = ["person"], ["guy"] = ["person"], ["guys"] = ["person"], ["kid"] = ["person"],
         ["kids"] = ["person"], ["child"] = ["person"], ["children"] = ["person"],
+        ["faces"] = ["face"], ["facial"] = ["face"],
         ["sedan"] = ["car"], ["sedans"] = ["car"], ["hatchback"] = ["car"], ["taxi"] = ["car"], ["taxis"] = ["car"],
         ["cab"] = ["car"], ["cabs"] = ["car"], ["suv"] = ["car"], ["suvs"] = ["car"], ["jeep"] = ["car"],
         ["lorry"] = ["truck"], ["lorries"] = ["truck"], ["tempo"] = ["truck"], ["tempos"] = ["truck"], ["van"] = ["truck"],
@@ -121,7 +123,7 @@ public sealed class QuestionPlanner
     [
         (new Regex(@"\b(colou?rs?|red|blue|white|black|green|yellow|silver|grey|gray|brown|pink|purple)\b", RegexOptions.Compiled), "colours"),
         (new Regex(@"\b(number ?plates?|licen[cs]e ?plates?|registration|plates?|anpr)\b", RegexOptions.Compiled), "licence plates"),
-        (new Regex(@"\b(faces?|who (is|was|were|are)|identity|identities|identify|recogni[sz]e|name of)\b", RegexOptions.Compiled), "faces or identities"),
+        (new Regex(@"\b(who (is|was|were|are)|identity|identities|identify|recogni[sz]e|name of)\b", RegexOptions.Compiled), "identities"),
         (new Regex(@"\b(speeds?|speeding|fast|slow|km/?h|kmph|mph)\b", RegexOptions.Compiled), "speed"),
         (new Regex(@"\b(direction|towards?|heading|left to right|right to left|entering|exiting|enters?|exits?|incoming|outgoing|northbound|southbound|eastbound|westbound|turn(ed|ing)?)\b", RegexOptions.Compiled), "direction of travel"),
     ];

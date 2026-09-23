@@ -13,7 +13,12 @@ public static class CocoLabels
         "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard",
         "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
         "scissors", "teddy bear", "hair drier", "toothbrush",
+        // Not COCO: produced by the separate face model, whose class 0 is shifted to this id.
+        "face",
     ];
+
+    /// <summary>Class id for detections from the face model.</summary>
+    public const int Face = 80;
 
     public static string Name(int classId) =>
         classId >= 0 && classId < Names.Length ? Names[classId] : $"class_{classId}";

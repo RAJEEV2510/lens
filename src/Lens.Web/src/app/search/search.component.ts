@@ -4,7 +4,7 @@ import { ApiService } from '../core/api.service';
 import { DetectionHit, SearchParams, VideoInfo, fmtClock } from '../core/models';
 import { HitsGridComponent } from './hits-grid.component';
 
-const CLASSES = ['person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat', 'backpack', 'handbag', 'suitcase', 'umbrella'];
+const CLASSES = ['person', 'face', 'car', 'truck', 'bus', 'motorcycle', 'bicycle', 'dog', 'cat', 'backpack', 'handbag', 'suitcase', 'umbrella'];
 
 /** Filter search across every indexed video and live camera. No model involved; this is the honest view of what was detected. */
 @Component({
