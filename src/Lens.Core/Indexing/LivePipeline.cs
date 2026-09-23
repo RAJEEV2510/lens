@@ -13,6 +13,9 @@ public sealed record LiveDetectionEvent(
     int SourceId, int VideoId, string Camera, int FrameIndex, double TimestampSeconds, DateTimeOffset OccurredAt,
     IReadOnlyList<Detection> Detections, bool FrameSaved);
 
+/// <summary>One processed frame with what the detector found in it. The pixels are the detector's own input, so boxes always line up.</summary>
+public sealed record LiveFrame(int VideoId, Frame Frame, Letterbox Letterbox, IReadOnlyList<Detection> Detections, DateTimeOffset At);
+
 public sealed record LiveProgress(long Frames, long Detections, double MeasuredFps, DateTimeOffset LastFrameAt, double InferenceMs);
 
 /// <summary>
@@ -45,7 +48,8 @@ public sealed class LivePipeline
         _log = log ?? NullLogger.Instance;
     }
 
-    public async Task RunAsync(VideoSource source, Func<LiveDetectionEvent, Task>? onEvent, Action<LiveProgress>? onProgress, CancellationToken ct)
+    public async Task RunAsync(VideoSource source, Func<LiveDetectionEvent, Task>? onEvent, Action<LiveProgress>? onProgress, CancellationToken ct,
+        Action<LiveFrame>? onFrame = null)
     {
         // Detection can run on a lower-resolution sub-stream while playback uses the main one.
         var detectUrl = string.IsNullOrWhiteSpace(source.DetectUrl) ? source.Url : source.DetectUrl;
@@ -133,6 +137,7 @@ public sealed class LivePipeline
                 }
 
                 buffer.AddRange(found);
+                onFrame?.Invoke(new LiveFrame(videoId, frame, letterbox, found, now));
                 onProgress?.Invoke(new LiveProgress(frames, total, measuredFps, now, inference.Elapsed.TotalMilliseconds));
 
                 if (onEvent is not null && found.Count > 0)

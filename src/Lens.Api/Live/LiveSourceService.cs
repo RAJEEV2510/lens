@@ -52,6 +52,10 @@ public sealed class LiveSourceService : BackgroundService
         public required CancellationTokenSource Cts { get; init; }
         public Task Task { get; set; } = Task.CompletedTask;
         public SourceState State { get; } = new();
+        /// <summary>Newest processed frame, replaced on every sample. Encoded lazily when a viewer asks for it.</summary>
+        public LiveFrame? Latest;
+        public (int FrameIndex, byte[] Jpeg)? Encoded;
+        public readonly object EncodeGate = new();
     }
 
     private readonly IDetectionStore _store;
@@ -155,6 +159,41 @@ public sealed class LiveSourceService : BackgroundService
         return existed || runner is not null;
     }
 
+    /// <summary>The latest processed frame of a source with its detections drawn on the server, or null before the first frame.</summary>
+    public (int FrameIndex, byte[] Jpeg)? AnnotatedJpeg(int sourceId)
+    {
+        if (!_runners.TryGetValue(sourceId, out var runner) || runner.Latest is not { } latest) return null;
+        lock (runner.EncodeGate)
+        {
+            if (runner.Encoded is { } cached && cached.FrameIndex == latest.Frame.Index) return cached;
+            var caption = $"{runner.Source.Name} · {latest.At.ToLocalTime():HH:mm:ss} · frame {latest.Frame.Index} · {latest.Detections.Count} detection(s)";
+            var jpeg = FrameAnnotator.Annotate(latest.Frame, latest.Letterbox, latest.Detections, caption);
+            runner.Encoded = (latest.Frame.Index, jpeg);
+            return runner.Encoded;
+        }
+    }
+
+    /// <summary>MJPEG of annotated frames at the pipeline's own rate: a new part whenever the detector finishes a frame.</summary>
+    public async Task StreamAnnotatedAsync(int sourceId, Stream output, CancellationToken ct)
+    {
+        var lastIndex = -1;
+        while (!ct.IsCancellationRequested)
+        {
+            if (!_runners.ContainsKey(sourceId)) return;
+            var current = AnnotatedJpeg(sourceId);
+            if (current is { } f && f.FrameIndex != lastIndex)
+            {
+                lastIndex = f.FrameIndex;
+                var header = System.Text.Encoding.ASCII.GetBytes($"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {f.Jpeg.Length}\r\n\r\n");
+                await output.WriteAsync(header, ct);
+                await output.WriteAsync(f.Jpeg, ct);
+                await output.WriteAsync("\r\n"u8.ToArray(), ct);
+                await output.FlushAsync(ct);
+            }
+            await Task.Delay(100, ct);
+        }
+    }
+
     public Task<bool> SetEnabledAsync(int id, bool enabled, CancellationToken ct) =>
         UpdateAsync(id, s => s with { Enabled = enabled }, ct).ContinueWith(t => t.Result is not null, ct);
 
@@ -202,7 +241,8 @@ public sealed class LiveSourceService : BackgroundService
                         state.Detections = p.Detections;
                         state.InferenceMs = p.InferenceMs;
                     },
-                    ct);
+                    ct,
+                    onFrame: f => runner.Latest = f);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

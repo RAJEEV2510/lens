@@ -43,6 +43,9 @@ export class ApiService {
   enableSource(id: number, enabled: boolean): Observable<void> { return this.http.post<void>(`/api/sources/${id}/${enabled ? 'enable' : 'disable'}`, {}); }
   deleteSource(id: number): Observable<void> { return this.http.delete<void>(`/api/sources/${id}`); }
   mjpegUrl(id: number): string { return `/api/sources/${id}/mjpeg`; }
+  /** Server-annotated MJPEG: the detector's own frames with boxes drawn on, no overlay timing involved. */
+  annotatedUrl(id: number): string { return `/api/sources/${id}/annotated`; }
+  annotatedFrameUrl(videoId: number, t: number): string { return `/api/frame?videoId=${videoId}&t=${t}&annotate=true`; }
 
   status(): Observable<Status> { return this.http.get<Status>('/api/status'); }
 

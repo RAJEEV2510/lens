@@ -16,6 +16,9 @@ import { CameraTileComponent } from './camera-tile.component';
       <h2>Live</h2>
       <span class="muted small">{{ sources().length }} camera(s) · {{ running() }} running · {{ playback() }}</span>
       <span class="grow"></span>
+      <label class="small muted" title="Show the exact frames the detector processed, boxes drawn on the server. No overlay timing, at the detector's frame rate.">
+        <input type="checkbox" [checked]="analytics()" (change)="setAnalytics($any($event.target).checked)"> Analytics view
+      </label>
       <label class="small muted">Grid
         <select [value]="grid()" (change)="grid.set(+$any($event.target).value)">
           <option value="0">auto</option><option value="1">1</option><option value="2">2 × 2</option><option value="3">3 × 3</option><option value="4">4 × 4</option>
@@ -32,14 +35,14 @@ import { CameraTileComponent } from './camera-tile.component';
     <div class="layout" [class.has-expanded]="expanded() !== null">
       <div class="wall" [style.grid-template-columns]="columns()">
         @for (s of visible(); track s.id) {
-          <app-camera-tile [source]="s" [webrtcBase]="webrtcBase()" [expanded]="expanded() === s.id" (select)="toggle($event)" />
+          <app-camera-tile [source]="s" [webrtcBase]="webrtcBase()" [expanded]="expanded() === s.id" [analytics]="analytics()" (select)="toggle($event)" />
         }
       </div>
       @if (expanded() !== null) {
         <div class="side">
           <div class="panel thumbs">
             @for (s of others(); track s.id) {
-              <app-camera-tile [source]="s" [webrtcBase]="webrtcBase()" (select)="toggle($event)" />
+              <app-camera-tile [source]="s" [webrtcBase]="webrtcBase()" [analytics]="analytics()" (select)="toggle($event)" />
             }
           </div>
         </div>
@@ -78,6 +81,7 @@ export class LiveWallComponent implements OnInit {
   readonly grid = signal(0);
   readonly expanded = signal<number | null>(null);
   readonly feed = signal<LiveEvent[]>([]);
+  readonly analytics = signal(false);
 
   readonly enabled = computed(() => this.sources().filter(s => s.enabled));
   readonly running = computed(() => this.sources().filter(s => s.status === 'running').length);
@@ -93,10 +97,16 @@ export class LiveWallComponent implements OnInit {
   colour = colourFor;
 
   ngOnInit(): void {
+    try { this.analytics.set(localStorage.getItem('lens.analytics') === '1'); } catch { /* private mode */ }
     this.refresh();
     const timer = setInterval(() => this.refresh(), 3000);
     this.destroyRef.onDestroy(() => clearInterval(timer));
     this.live.events$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(e => this.feed.update(f => [e, ...f].slice(0, 60)));
+  }
+
+  setAnalytics(on: boolean): void {
+    this.analytics.set(on);
+    try { localStorage.setItem('lens.analytics', on ? '1' : '0'); } catch { /* ignore */ }
   }
 
   toggle(id: number): void { this.expanded.set(this.expanded() === id ? null : id); }

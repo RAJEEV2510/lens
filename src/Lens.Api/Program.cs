@@ -128,19 +128,39 @@ api.MapGet("/detections/counts", async (IDetectionStore s, CancellationToken ct,
 });
 
 // A JPEG of one moment in a video, so the UI can show what a hit looked like.
-api.MapGet("/frame", async (int videoId, double t, IDetectionStore s, FrameSampler sampler, FrameArchive archive, CancellationToken ct) =>
+// With annotate=true the detections stored for that moment are drawn on the server, so the picture and the boxes cannot disagree.
+api.MapGet("/frame", async (int videoId, double t, bool? annotate, IDetectionStore s, FrameSampler sampler, FrameArchive archive, CancellationToken ct) =>
 {
     var video = await s.GetVideoAsync(videoId, ct);
     if (video is null) return Results.NotFound();
 
     // Live sources cannot be seeked afterwards, so their pictures come from the archive. Files fall back to it too if present.
     var sampleFps = 2.0;
+    byte[] jpeg;
+    var at = t;
     var archived = archive.FindNearest(videoId, t, sampleFps);
-    if (archived is not null) return Results.File(archived, "image/jpeg");
-    if (video.IsLive || !File.Exists(video.Path)) return Results.NotFound();
+    if (archived is not null)
+    {
+        if (annotate != true) return Results.File(archived, "image/jpeg");
+        jpeg = await File.ReadAllBytesAsync(archived, ct);
+        if (int.TryParse(Path.GetFileNameWithoutExtension(archived), out var frameIndex)) at = frameIndex / sampleFps;
+    }
+    else
+    {
+        if (video.IsLive || !File.Exists(video.Path)) return Results.NotFound();
+        jpeg = await sampler.GrabJpegAsync(video.Path, Math.Clamp(t, 0, Math.Max(0, video.DurationSeconds - 0.1)), 960, ct);
+        if (annotate != true) return Results.File(jpeg, "image/jpeg");
+    }
 
-    var jpeg = await sampler.GrabJpegAsync(video.Path, Math.Clamp(t, 0, Math.Max(0, video.DurationSeconds - 0.1)), 960, ct);
-    return Results.File(jpeg, "image/jpeg");
+    var half = 0.5 / sampleFps + 0.01;
+    var hits = await s.SearchAsync(new SearchRequest
+    {
+        Filter = new DetectionFilter { VideoId = videoId, FromSeconds = at - half, ToSeconds = at + half },
+        Limit = 200, GroupWindowSeconds = 0,
+    }, ct);
+    var dets = hits.Select(h => new Detection(videoId, 0, h.TimestampSeconds, 0, h.ClassName, h.Confidence, h.X1, h.Y1, h.X2, h.Y2));
+    var caption = $"{video.Name} · {video.StartedAt.AddSeconds(at):HH:mm:ss} · {(int)(at / 60)}:{(int)(at % 60):00} · {hits.Count} detection(s)";
+    return Results.File(FrameAnnotator.Annotate(jpeg, dets, caption), "image/jpeg");
 });
 
 api.MapGet("/ask/providers", async (AskRouter router, CancellationToken ct) => Results.Ok(await router.StatusAsync(ct)));
@@ -313,6 +333,23 @@ api.MapPost("/sources/{id:int}/disable", async (int id, LiveSourceService live, 
 
 api.MapDelete("/sources/{id:int}", async (int id, LiveSourceService live, CancellationToken ct) =>
     await live.RemoveAsync(id, ct) ? Results.Ok() : Results.NotFound());
+
+// Analytics view: the exact frames the detector processed, boxes drawn on the server. Single frame, or MJPEG at the detector's rate.
+api.MapGet("/sources/{id:int}/annotated.jpg", (int id, LiveSourceService live) =>
+    live.AnnotatedJpeg(id) is { } f
+        ? Results.File(f.Jpeg, "image/jpeg")
+        : Results.NotFound(new { error = "no frame processed yet for this source" }));
+
+api.MapGet("/sources/{id:int}/annotated", async (int id, HttpContext http, LiveSourceService live, CancellationToken ct) =>
+{
+    http.Response.ContentType = "multipart/x-mixed-replace; boundary=frame";
+    http.Response.Headers.CacheControl = "no-store";
+    await http.Response.StartAsync(ct);
+    try { await live.StreamAnnotatedAsync(id, http.Response.Body, ct); }
+    catch (OperationCanceledException) { }
+    catch (IOException) { }
+    return Results.Empty;
+});
 
 // MJPEG fallback player: one ffmpeg per viewer, 5 fps, killed when the browser disconnects. Used when MediaMTX is not available.
 api.MapGet("/sources/{id:int}/mjpeg", async (int id, HttpContext http, IDetectionStore s, FrameSampler sampler, CancellationToken ct) =>

@@ -16,7 +16,7 @@ import { WhepPlayer } from '../core/whep-player';
       <div class="media" [style.aspect-ratio]="aspect()">
         @if (mode() === 'webrtc') {
           <video #video autoplay muted playsinline (loadedmetadata)="onMeta()"></video>
-        } @else if (mode() === 'mjpeg') {
+        } @else if (mode() === 'mjpeg' || mode() === 'analytics') {
           <img #img [src]="mjpegSrc()" alt="" (load)="onMeta()">
         } @else {
           <div class="placeholder">{{ placeholder() }}</div>
@@ -27,7 +27,7 @@ import { WhepPlayer } from '../core/whep-player';
           <b>{{ source().name }}</b>
           <span class="muted">{{ source().camera }}</span>
           <span class="grow"></span>
-          <span class="muted small">{{ mode() === 'webrtc' ? 'WebRTC' : mode() === 'mjpeg' ? 'MJPEG' : '' }}</span>
+          <span class="muted small">{{ mode() === 'webrtc' ? 'WebRTC' : mode() === 'mjpeg' ? 'MJPEG' : mode() === 'analytics' ? 'analytics · server-drawn' : '' }}</span>
         </div>
       </div>
       <div class="foot">
@@ -57,6 +57,8 @@ export class CameraTileComponent implements OnInit, OnChanges, OnDestroy {
   readonly source = input.required<Source>();
   readonly webrtcBase = input<string | null>(null);
   readonly expanded = input(false);
+  /** Analytics view: show the detector's own frames with boxes drawn on the server instead of live video plus a client overlay. */
+  readonly analytics = input(false);
   readonly select = output<number>();
 
   private readonly api = inject(ApiService);
@@ -66,7 +68,7 @@ export class CameraTileComponent implements OnInit, OnChanges, OnDestroy {
   private readonly imgRef = viewChild<ElementRef<HTMLImageElement>>('img');
   private readonly canvasRef = viewChild<ElementRef<HTMLCanvasElement>>('canvas');
 
-  readonly mode = signal<'webrtc' | 'mjpeg' | 'none'>('none');
+  readonly mode = signal<'webrtc' | 'mjpeg' | 'analytics' | 'none'>('none');
   readonly placeholder = signal('connecting…');
   readonly aspect = signal('16 / 9');
   readonly mjpegSrc = signal('');
@@ -92,7 +94,7 @@ export class CameraTileComponent implements OnInit, OnChanges, OnDestroy {
   ngOnChanges(changes: SimpleChanges): void {
     const s = this.source();
     this.recent.set(Object.entries(s.recent ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 5));
-    if (changes['source'] || changes['webrtcBase']) this.choosePlayer();
+    if (changes['source'] || changes['webrtcBase'] || changes['analytics']) this.choosePlayer();
   }
 
   ngOnDestroy(): void {
@@ -116,6 +118,18 @@ export class CameraTileComponent implements OnInit, OnChanges, OnDestroy {
     const s = this.source();
     if (!s.enabled || s.status === 'disabled') {
       this.setMode('none', 'camera disabled');
+      return;
+    }
+    if (this.analytics()) {
+      if (s.status === 'running' || s.status === 'connecting') {
+        if (this.mode() !== 'analytics') {
+          this.player?.stop();
+          this.mjpegSrc.set(this.api.annotatedUrl(s.id) + '?_=' + Date.now());
+          this.setMode('analytics', '');
+        }
+      } else {
+        this.setMode('none', s.status === 'reconnecting' ? 'stream down, reconnecting…' : 'waiting for stream…');
+      }
       return;
     }
     const base = this.webrtcBase();
@@ -158,9 +172,9 @@ export class CameraTileComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  private setMode(mode: 'webrtc' | 'mjpeg' | 'none', text: string): void {
+  private setMode(mode: 'webrtc' | 'mjpeg' | 'analytics' | 'none', text: string): void {
     if (mode !== 'webrtc') { this.player?.stop(); this.playedPath = null; }
-    if (mode !== 'mjpeg') this.mjpegSrc.set('');
+    if (mode !== 'mjpeg' && mode !== 'analytics') this.mjpegSrc.set('');
     this.mode.set(mode);
     this.placeholder.set(text);
     this.lastMode = mode;
@@ -173,6 +187,7 @@ export class CameraTileComponent implements OnInit, OnChanges, OnDestroy {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    if (this.mode() === 'analytics') { ctx.clearRect(0, 0, canvas.width, canvas.height); return; } // boxes are already in the picture
 
     const offset = this.source().overlayOffsetMs ?? 300;
     const now = Date.now();

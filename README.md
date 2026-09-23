@@ -100,6 +100,10 @@ Browsers cannot play RTSP. Lens uses the same layering as Frigate: a media gatew
 - **WebRTC through MediaMTX.** When a camera is added, Lens registers a path in MediaMTX over its API (`rtspTransport: tcp`, on demand).
   MediaMTX pulls the camera only while someone is watching and serves the browser over WHEP with sub-second latency.
   Enable the API in `mediamtx.yml` (`api: yes`); WebRTC is on by default. Configure with `Lens:MediaMtx:ApiUrl` and `WebRtcUrl`.
+- **Analytics view.** A checkbox on the Live page swaps every tile for the exact frames the detector processed, boxes and labels
+  drawn on the server (`GET /api/sources/{id}/annotated`, MJPEG at the detector's own rate; `annotated.jpg` for one frame). What you
+  see is precisely what was detected, with no playback latency or overlay offset in between. `GET /api/frame?...&annotate=true`
+  does the same for any archived or indexed moment, drawing the detections stored for that frame.
 - **MJPEG fallback.** If MediaMTX is not reachable, the tile plays `/api/sources/{id}/mjpeg`, an ffmpeg-per-viewer stream at 5 fps from Lens itself.
 - **Boxes over live video.** Detections arrive over SignalR with wall-clock times and are drawn on a canvas over the video, delayed by the
   camera's overlay offset to match playback latency. They line up within a few hundred milliseconds, not frame-exact; the archived
@@ -235,8 +239,7 @@ Search over the JSON store returns in single-digit milliseconds at this size. Po
 
 ## Roadmap
 
-- [ ] **Analytics view per camera.** A second stream, next to the live WebRTC one, showing the exact frames Lens processed with its own boxes
-      drawn server-side. What you see is precisely what was detected, with no overlay timing guesswork. The live view stays for low latency.
+- [x] **Analytics view per camera.** The exact frames Lens processed with its own boxes drawn server-side, as a toggle on the Live page.
 - [ ] **One stream for detection and playback.** Run detection on MediaMTX's path for the camera so both consumers read the same moment
       (with file-backed test servers each RTSP session starts from the beginning, so today the two can be minutes apart).
 - [ ] **Latest-frame-wins in the live pipeline.** Drop stale frames when inference falls behind instead of queueing them, so box lag stays bounded.
@@ -256,9 +259,9 @@ Search over the JSON store returns in single-digit milliseconds at this size. Po
 dotnet test
 ```
 
-34 unit tests cover the letterbox maths, NMS, both YOLO output formats, search grouping and filters on the JSON store, the frame archive,
-the no-model question planner (intents, synonyms, seconds and clock windows, camera scoping, unsupported concepts), and the RAG path
-(event sentences, the file vector index, incremental builds).
+36 unit tests cover the letterbox maths, NMS, both YOLO output formats, search grouping and filters on the JSON store, the frame archive,
+the no-model question planner (intents, synonyms, seconds and clock windows, camera scoping, unsupported concepts), the RAG path
+(event sentences, the file vector index, incremental builds), and server-side frame annotation.
 CI also applies the schema to a real TimescaleDB container and builds the Docker image.
 
 ## Licence
