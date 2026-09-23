@@ -7,6 +7,7 @@ using Lens.Api.Live;
 using Lens.Core.Indexing;
 using Lens.Core.Models;
 using Lens.Core.Inference;
+using Lens.Core.Query;
 using Lens.Core.Storage;
 using Lens.Core.Video;
 using Microsoft.AspNetCore.Http.Features;
@@ -31,6 +32,24 @@ builder.Services.AddSingleton(new AgentOptions
     MaxToolRounds = int.TryParse(lens["MaxToolRounds"], out var r) ? r : 8,
 });
 builder.Services.AddSingleton<LensAgent>();
+
+// Who answers questions: the no-model planner first, then a local open model through Ollama, then Claude if configured.
+builder.Services.AddSingleton<QuestionPlanner>();
+builder.Services.AddSingleton(new OllamaOptions
+{
+    Url = builder.Configuration["OLLAMA_URL"] ?? lens["OllamaUrl"] ?? "http://localhost:11434",
+    Model = builder.Configuration["OLLAMA_MODEL"] ?? lens["OllamaModel"] ?? "qwen2.5:3b",
+});
+builder.Services.AddHttpClient<OllamaAgent>();
+builder.Services.AddSingleton<OllamaAgent>(sp => new OllamaAgent(
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OllamaAgent)),
+    sp.GetRequiredService<AgentTools>(), sp.GetRequiredService<OllamaOptions>(), sp.GetRequiredService<ILogger<OllamaAgent>>()));
+builder.Services.AddSingleton(new AskRouterOptions
+{
+    Provider = builder.Configuration["PROVIDER"] ?? lens["Provider"] ?? "auto",
+    LogPath = (builder.Configuration["ASK_LOG_PATH"] ?? lens["AskLogPath"]) is { Length: > 0 } lp ? Path.GetFullPath(lp, builder.Environment.ContentRootPath) : null,
+});
+builder.Services.AddSingleton<AskRouter>();
 builder.Services.AddSingleton<IndexQueue>();
 builder.Services.AddHostedService<IndexWorker>();
 
@@ -113,32 +132,39 @@ api.MapGet("/frame", async (int videoId, double t, IDetectionStore s, FrameSampl
     return Results.File(jpeg, "image/jpeg");
 });
 
-api.MapPost("/ask", async (AskRequest body, LensAgent agent, CancellationToken ct) =>
+api.MapGet("/ask/providers", async (AskRouter router, CancellationToken ct) => Results.Ok(await router.StatusAsync(ct)));
+
+api.MapPost("/ask", async (AskRequest body, AskRouter router, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(body.Question)) return Results.BadRequest(new { error = "question is required" });
     if (body.Question.Length > 1000) return Results.BadRequest(new { error = "question too long" });
     try
     {
-        var result = await agent.AskAsync(body.Question.Trim(), body.VideoId, ct);
+        var result = await router.AskAsync(body.Question.Trim(), body.VideoId, ct);
         return Results.Ok(result);
+    }
+    catch (ProviderUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: 503);
+    }
+    catch (HttpRequestException ex)
+    {
+        app.Logger.LogError(ex, "local model error");
+        return Results.Json(new { error = "The local model call failed.", detail = ex.Message }, statusCode: 502);
     }
     catch (AnthropicRateLimitException ex)
     {
-        return Results.Json(new { error = "The model is rate limited right now, try again in a minute.", detail = ex.Message }, statusCode: 429);
+        return Results.Json(new { error = "Claude is rate limited right now, try again in a minute.", detail = ex.Message }, statusCode: 429);
     }
     catch (AnthropicApiException ex) when (ex.Message.Contains("authentication_error", StringComparison.OrdinalIgnoreCase)
                                           || ex.Message.Contains("x-api-key", StringComparison.OrdinalIgnoreCase))
     {
-        return Results.Json(new
-        {
-            error = "No Claude API key is configured, so the question box cannot run. Direct search still works. " +
-                    "Set the ANTHROPIC_API_KEY environment variable and restart the API.",
-        }, statusCode: 503);
+        return Results.Json(new { error = "The Claude API key was rejected. Check ANTHROPIC_API_KEY, or unset it to use the local model only." }, statusCode: 503);
     }
     catch (AnthropicApiException ex)
     {
         app.Logger.LogError(ex, "Claude API error");
-        return Results.Json(new { error = "The model call failed.", detail = ex.Message }, statusCode: 502);
+        return Results.Json(new { error = "The Claude call failed.", detail = ex.Message }, statusCode: 502);
     }
 });
 

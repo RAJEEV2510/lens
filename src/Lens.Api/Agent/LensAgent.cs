@@ -11,10 +11,6 @@ public sealed record AgentOptions
     public int MaxToolRounds { get; init; } = 8;
 }
 
-public sealed record ToolCallTrace(string Tool, JsonElement Input, int ResultChars, double Ms);
-
-public sealed record AskResult(string Answer, IReadOnlyList<DetectionHit> Hits, IReadOnlyList<ToolCallTrace> ToolCalls, string StopReason, long InputTokens, long OutputTokens);
-
 /// <summary>
 /// Turns a plain-English question into store queries via Claude tool use, then into a short answer.
 /// A manual tool loop keeps every call visible: the trace goes back to the UI so a reviewer can see how the answer was reached.
@@ -54,6 +50,7 @@ public sealed class LensAgent
 
     public async Task<AskResult> AskAsync(string question, int? videoId, CancellationToken ct)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var context = $"Current date/time: {DateTimeOffset.Now:yyyy-MM-dd HH:mm zzz}.";
         if (videoId is { } vid) context += $" The user is currently looking at video_id {vid}; prefer it unless they ask about others.";
 
@@ -136,6 +133,6 @@ public sealed class LensAgent
 
         // De-duplicate hits across tool calls, keep chronological order.
         var unique = hits.GroupBy(h => (h.VideoId, h.ClassName, h.TimestampSeconds)).Select(g => g.First()).OrderBy(h => h.OccurredAt).ToList();
-        return new AskResult(answer, unique, trace, stopReason, inTok, outTok);
+        return new AskResult(answer, unique, trace, stopReason, inTok, outTok, "claude:" + _options.Model, sw.Elapsed.TotalMilliseconds);
     }
 }
