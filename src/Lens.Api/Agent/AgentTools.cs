@@ -33,7 +33,7 @@ public sealed class AgentTools
         ["classes"] = JsonSerializer.SerializeToElement(new
         {
             type = "array", items = new { type = "string", @enum = CocoLabels.Names },
-            description = "COCO class names to look for, e.g. [\"car\",\"truck\"]. Omit for all classes.",
+            description = "Class names to look for (COCO names plus \"face\"), e.g. [\"car\",\"truck\"]. Omit for all classes.",
         }),
         ["from_seconds"] = Prop("number", "Only sightings at or after this many seconds into the video."),
         ["to_seconds"] = Prop("number", "Only sightings at or before this many seconds into the video."),

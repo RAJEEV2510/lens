@@ -1,0 +1,9 @@
+# Local build output and dependencies must not reach the image; the Dockerfile restores and builds its own.
+**/bin/
+**/obj/
+**/node_modules/
+**/.angular/
+data/
+models/
+samples/*.mp4
+.env

@@ -124,6 +124,22 @@ public class QuestionPlannerTests : IDisposable
     }
 
     [Fact]
+    public async Task Faces_are_a_class_but_identities_are_unsupported()
+    {
+        var (planner, _) = await SeedAsync();
+        var faces = await planner.TryAnswerAsync("how many faces?", null);
+        Assert.NotNull(faces);
+        Assert.Equal("count", faces.Kind);
+        var search = faces.Calls.First(c => c.Tool == "search_detections");
+        Assert.Equal(new[] { "face" }, (IEnumerable<string>)search.Input["classes"]!);
+
+        var who = await planner.TryAnswerAsync("who is that person?", null);
+        Assert.NotNull(who);
+        Assert.Equal("unsupported", who.Kind);
+        Assert.Contains("identities", who.Answer);
+    }
+
+    [Fact]
     public async Task Questions_it_cannot_parse_return_null_for_a_model()
     {
         var (planner, _) = await SeedAsync();

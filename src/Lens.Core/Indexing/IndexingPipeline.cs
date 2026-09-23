@@ -38,12 +38,15 @@ public sealed class IndexingPipeline
 {
     private readonly IDetectionStore _store;
     private readonly string _modelPath;
+    private readonly string? _faceModelPath;
     private readonly string? _ffmpegDir;
 
-    public IndexingPipeline(IDetectionStore store, string modelPath, string? ffmpegDir = null)
+    /// <param name="faceModelPath">Optional single-class face model run alongside the object model. Null skips faces.</param>
+    public IndexingPipeline(IDetectionStore store, string modelPath, string? ffmpegDir = null, string? faceModelPath = null)
     {
         _store = store;
         _modelPath = modelPath;
+        _faceModelPath = faceModelPath;
         _ffmpegDir = ffmpegDir;
     }
 
@@ -64,12 +67,7 @@ public sealed class IndexingPipeline
         };
         var videoId = await _store.UpsertVideoAsync(video, clearDetections: true, ct);
 
-        using var detector = new YoloDetector(new DetectorOptions
-        {
-            ModelPath = _modelPath,
-            ConfidenceThreshold = request.Confidence,
-            KeepClasses = request.KeepClasses,
-        });
+        using var detector = new DetectorSet(_modelPath, _faceModelPath, request.Confidence, request.KeepClasses);
         var letterbox = new Letterbox(probe.Width, probe.Height, detector.InputSize);
         var sampler = new FrameSampler(_ffmpegDir);
 
@@ -116,12 +114,17 @@ public sealed class IndexingPipeline
     }
 
     /// <summary>Finds models/yolov10n.onnx by walking up from the application directory.</summary>
-    public static string? FindDefaultModel()
+    public static string? FindDefaultModel() => FindModel("yolov10n.onnx");
+
+    /// <summary>Finds models/yolov11n-face.onnx the same way. Null when it is not there, and faces are skipped.</summary>
+    public static string? FindDefaultFaceModel() => FindModel("yolov11n-face.onnx");
+
+    private static string? FindModel(string fileName)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
         {
-            var p = Path.Combine(dir.FullName, "models", "yolov10n.onnx");
+            var p = Path.Combine(dir.FullName, "models", fileName);
             if (File.Exists(p)) return p;
         }
         return null;

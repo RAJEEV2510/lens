@@ -23,6 +23,8 @@ video ──▶ ffmpeg (decode, 2 fps, letterbox) ──▶ YOLOv10 (ONNX Runtim
 
 - **Index** any file ffmpeg can decode: mp4, mkv, mov, ts, or an RTSP URL. Two frames per second by default.
 - **Detect** 80 COCO classes: person, car, truck, bus, motorcycle, bicycle and more. About 13 to 19 frames/s on a laptop CPU.
+- **Find faces** with a second model (`models/yolov11n-face.onnx`, or `LENS_FACE_MODEL_PATH`) run on the same frames; they are stored
+  as class `face`. Detection only, no recognition. Leave the model out and faces are skipped.
 - **Store** detections with a time in seconds and a wall-clock time, so both "at 0:42" and "after 6pm" work.
 - **Search** by class, camera, time window, confidence and minimum box size. Consecutive sightings collapse into events with a start and end.
 - **Ask** in plain English. Common questions are answered straight from the store in a few milliseconds with no model. The rest go to a
@@ -36,7 +38,7 @@ video ──▶ ffmpeg (decode, 2 fps, letterbox) ──▶ YOLOv10 (ONNX Runtim
 ```powershell
 git clone https://github.com/RAJEEV2510/lens && cd lens
 .\scripts\get-ffmpeg.ps1        # portable ffmpeg into tools/  (~190 MB)
-.\scripts\get-models.ps1        # YOLOv10n ONNX into models/   (~9 MB)
+.\scripts\get-models.ps1        # YOLOv10n + YOLOv11n-face ONNX into models/ (~19 MB)
 
 # index a clip into a JSON store
 dotnet run --project src/Lens.Indexer -c Release -- "D:\videos\junction.mp4" --camera "junction" --json data\lens.json --start "2026-09-22T18:00:00+05:30"

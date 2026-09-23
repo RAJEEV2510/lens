@@ -61,6 +61,7 @@ public sealed class LiveSourceService : BackgroundService
     private readonly ILogger<LiveSourceService> _log;
     private readonly ILoggerFactory _loggers;
     private readonly string _modelPath;
+    private readonly string? _faceModelPath;
     private readonly string? _ffmpegDir;
     private readonly ConcurrentDictionary<int, Runner> _runners = new();
     private CancellationToken _stopping;
@@ -77,6 +78,8 @@ public sealed class LiveSourceService : BackgroundService
         _ffmpegDir = config["FFMPEG_DIR"];
         _modelPath = config["MODEL_PATH"] ?? config["Lens:ModelPath"] ?? IndexingPipeline.FindDefaultModel()
                      ?? throw new InvalidOperationException("YOLO model not found. Run scripts/get-models.ps1 or set LENS_MODEL_PATH.");
+        _faceModelPath = config["FACE_MODEL_PATH"] ?? config["Lens:FaceModelPath"] ?? IndexingPipeline.FindDefaultFaceModel();
+        _log.LogInformation("live: face detection {State}", _faceModelPath is null ? "off (no face model)" : "on, " + _faceModelPath);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -173,7 +176,7 @@ public sealed class LiveSourceService : BackgroundService
     {
         var ct = runner.Cts.Token;
         var state = runner.State;
-        var pipeline = new LivePipeline(_store, _archive, _modelPath, _ffmpegDir, _loggers.CreateLogger<LivePipeline>());
+        var pipeline = new LivePipeline(_store, _archive, _modelPath, _ffmpegDir, _loggers.CreateLogger<LivePipeline>(), _faceModelPath);
 
         while (!ct.IsCancellationRequested)
         {
