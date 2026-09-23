@@ -15,6 +15,7 @@ tools/*.zip
 models/*.onnx
 *.mp4
 *.ts
+!src/**/*.ts
 *.mkv
 !samples/README.md
 
