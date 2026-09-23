@@ -6,16 +6,17 @@ Drop in camera footage, Lens indexes every object it sees, and you search it by 
 *"when was the first bus seen?"* or *"how many trucks passed in the first 30 seconds?"*. Answers come back
 with the matching frames, boxes drawn on.
 
-Built in .NET 8. Object detection runs locally on CPU with YOLOv10 through ONNX Runtime. The question box is a
-Claude tool-use agent that turns the sentence into structured queries against the detection store, then writes
-a short answer. No cloud is needed for indexing or for direct search.
+Built in .NET 8. Object detection runs locally on CPU with YOLOv10 through ONNX Runtime. The question box answers
+from the database first, with no model at all, for the everyday questions (when, how many, show me, any, what footage).
+Anything else goes to a local open model through Ollama, and to Claude only if you set a key. Nothing needs the cloud.
 
 ```
 video ──▶ ffmpeg (decode, 2 fps, letterbox) ──▶ YOLOv10 (ONNX Runtime, CPU) ──▶ detections
                                                                                    │
                                                              PostgreSQL / TimescaleDB  or  a JSON file
                                                                                    │
-        "show me buses after 6pm" ──▶ Claude agent (3 tools) ──▶ search / count ──▶ answer + frames
+        "show me buses after 6pm" ──▶ planner (no model) ──▶ search / count ──▶ answer + frames
+                                    └─ else ──▶ local model via Ollama, or Claude ──▶ same 3 tools
 ```
 
 ## What it does today
@@ -24,7 +25,9 @@ video ──▶ ffmpeg (decode, 2 fps, letterbox) ──▶ YOLOv10 (ONNX Runtim
 - **Detect** 80 COCO classes: person, car, truck, bus, motorcycle, bicycle and more. About 13 to 19 frames/s on a laptop CPU.
 - **Store** detections with a time in seconds and a wall-clock time, so both "at 0:42" and "after 6pm" work.
 - **Search** by class, camera, time window, confidence and minimum box size. Consecutive sightings collapse into events with a start and end.
-- **Ask** in plain English. The agent calls `list_videos`, `search_detections` and `count_detections`, and the UI shows every tool call it made.
+- **Ask** in plain English. Common questions are answered straight from the store in a few milliseconds with no model. The rest go to a
+  local open model (Ollama) or Claude, which call `list_videos`, `search_detections` and `count_detections`. The UI shows every call made and who answered.
+- **Learn** from use: every question and the query that answered it is logged to `data/ask-log.jsonl`, ready to fine-tune your own small model.
 - **Upload** from the browser. Files go into a background indexing queue with live progress.
 - **Show** the exact frame for every hit, with the box drawn on it.
 
@@ -38,8 +41,11 @@ git clone https://github.com/RAJEEV2510/lens && cd lens
 # index a clip into a JSON store
 dotnet run --project src/Lens.Indexer -c Release -- "D:\videos\junction.mp4" --camera "junction" --json data\lens.json --start "2026-09-22T18:00:00+05:30"
 
-# run the API and the page
-$env:ANTHROPIC_API_KEY = "sk-ant-..."   # only needed for the question box
+# optional: a local open model for the harder questions (about 2 GB, runs on CPU)
+winget install Ollama.Ollama
+ollama pull qwen2.5:3b
+
+# run the API and the page. No API key needed.
 dotnet run --project src/Lens.Api -c Release --urls http://localhost:5080
 ```
 
@@ -61,7 +67,7 @@ done    : video #1, 120 frames, 934 detections in 9.0s (13.4 frames/s)
 ## Quick start (Docker)
 
 ```bash
-cp .env.example .env            # put your ANTHROPIC_API_KEY in it
+cp .env.example .env            # optional: ANTHROPIC_API_KEY, or LENS_OLLAMA_URL for a local model
 docker compose up --build
 ```
 
@@ -76,7 +82,7 @@ Angular 20 front end in `src/Lens.Web`, built into the API's `wwwroot` so there 
 | **Live** | Camera wall: 1 to 16 tiles, WebRTC video with detection boxes drawn live, per-tile fps and inference time, rolling class counts, click to expand, merged detection feed |
 | **Cameras** | Add, edit, pause, remove RTSP cameras; optional low-resolution sub-stream for detection; overlay offset per camera |
 | **Search** | Filter search over everything indexed, events or raw sightings, frames with boxes |
-| **Ask** | The Claude agent, with its tool-call trace |
+| **Ask** | The question box: database first, then a local model, then Claude. Shows who answered and every store call |
 | **Videos** | Upload recordings, watch indexing progress, browse the library |
 
 ```
@@ -146,14 +152,42 @@ A local file path can also be added as a source; it is read at real-time pace an
 | `GET /api/frame?videoId=1&t=12.5` | JPEG of that moment |
 | `POST /api/videos/upload` (multipart: `file`, `camera`, `startedAt`, `fps`) | Queue a video for indexing, returns a job |
 | `GET /api/jobs/{id}` | Indexing progress |
-| `POST /api/ask` `{ "question": "..." }` | The agent. Returns answer, hits and the tool-call trace |
+| `POST /api/ask` `{ "question": "..." }` | Answer, hits, the store calls made, and `provider` (`local`, `ollama:<model>` or `claude:<model>`) |
+| `GET /api/ask/providers` | Which answerers are available: the local model's reachability and whether a Claude key is set |
 
-## How the agent works
+## How the question box works
 
-The question goes to Claude with three tools. Each tool is one store query. The loop runs until Claude stops calling tools,
-at most eight rounds, and every call with its arguments and timing is returned to the UI. The agent only reads; it
-cannot change anything. The system prompt tells it what the data can and cannot answer, for example that colours and
-number plates are not available, so it says so instead of guessing.
+Three answerers, tried in order. `Lens:Provider` in `appsettings.json` (or `LENS_PROVIDER`) is `auto` by default and can be
+forced to `local`, `ollama` or `claude`.
+
+1. **Database first, no model.** `QuestionPlanner` in `Lens.Core/Query` reads the question with a small grammar: object classes and
+   their everyday synonyms (people, vehicles, bikes, lorries, autos), an intent (how many, first, last, show, any, what footage,
+   summary), a time window in seconds (`in the first 30 seconds`, `between 1:00 and 1:30`, `around 42 seconds`) or wall-clock
+   (`after 6pm`, `between 6:15pm and 6:45pm`, `in the evening`, read on the footage's own day and time zone), and a camera or video.
+   It runs the same store queries the model tools would, and writes the answer from a template. It answers in a few milliseconds and
+   costs nothing. If it sees a concept the detector cannot know (colour, plates, faces, speed, direction) it says so instead of
+   guessing. If it cannot parse the question at all, it hands over.
+2. **Local open model.** `OllamaAgent` runs the same tool loop against [Ollama](https://ollama.com) on `http://localhost:11434`
+   (`Lens:OllamaUrl`) with `qwen2.5:3b` by default (`Lens:OllamaModel`; any model that supports tools works, `llama3.2:3b` and
+   `qwen2.5:7b` are good choices if you have the RAM). The footage inventory is put into the prompt up front so a 3B model usually
+   answers with a single search call. Nothing leaves the machine. On a laptop CPU expect 10 to 40 seconds per question.
+3. **Claude.** Only if `ANTHROPIC_API_KEY` is set. Same tools, same loop, `LensAgent`.
+
+The UI shows which one answered and every store call it made.
+
+### Training your own model
+
+Every question, whoever answered it, is appended to `data/ask-log.jsonl` (`Lens:AskLogPath`, set it empty to disable) with the
+store calls and the answer. That log is a fine-tuning set in the making:
+
+```
+python scripts/export-training-data.py --provider local     # clean, deterministic rows from the planner
+python scripts/export-training-data.py --min-hits 1         # or everything that found something
+```
+
+It writes `data/train.jsonl` in the chat-with-tool-calls format that Unsloth, LLaMA-Factory and axolotl accept. A LoRA over
+`Qwen2.5-1.5B-Instruct` on a few hundred rows takes under an hour on a free Colab GPU; export the result as GGUF, `ollama create`
+it, set `Lens:OllamaModel` to its name, and the question box now runs on your own model.
 
 ## Design notes
 
@@ -182,7 +216,9 @@ Search over the JSON store returns in single-digit milliseconds at this size. Po
       (with file-backed test servers each RTSP session starts from the beginning, so today the two can be minutes apart).
 - [ ] **Latest-frame-wins in the live pipeline.** Drop stale frames when inference falls behind instead of queueing them, so box lag stays bounded.
 - [ ] CLIP embeddings per detection crop, pgvector search, so "white van" and "looks like this" work
-- [ ] Ollama provider so the question box runs offline with a local model
+- [x] Ollama provider so the question box runs offline with a local model
+- [x] Database-first planner so common questions never touch a model
+- [ ] Fine-tune a 1.5B model on the question log and ship it as the default local model
 - [ ] Amazon Bedrock provider (same agent, different client)
 - [ ] Eval suite: 50 questions with known answers, published accuracy
 - [ ] Live RTSP mode with SignalR push
@@ -194,7 +230,8 @@ Search over the JSON store returns in single-digit milliseconds at this size. Po
 dotnet test
 ```
 
-19 unit tests cover the letterbox maths, NMS, both YOLO output formats, search grouping and filters on the JSON store, and the frame archive.
+30 unit tests cover the letterbox maths, NMS, both YOLO output formats, search grouping and filters on the JSON store, the frame archive,
+and the no-model question planner (intents, synonyms, seconds and clock windows, camera scoping, unsupported concepts).
 CI also applies the schema to a real TimescaleDB container and builds the Docker image.
 
 ## Licence

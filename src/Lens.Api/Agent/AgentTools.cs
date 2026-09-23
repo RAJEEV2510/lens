@@ -19,67 +19,57 @@ public sealed class AgentTools
 
     public AgentTools(IDetectionStore store) => _store = store;
 
-    public static IReadOnlyList<Tool> Definitions { get; } =
+    /// <summary>One tool the agent can call, described independently of any model vendor's SDK.</summary>
+    public sealed record ToolSpec(string Name, string Description, IReadOnlyDictionary<string, JsonElement> Properties)
+    {
+        /// <summary>JSON schema object for the tool's input, as OpenAI-style and Ollama tool definitions expect it.</summary>
+        public JsonElement ParametersSchema => JsonSerializer.SerializeToElement(new { type = "object", properties = Properties, required = Array.Empty<string>() });
+    }
+
+    private static readonly Dictionary<string, JsonElement> FilterProps = new()
+    {
+        ["video_id"] = Prop("integer", "Restrict to one video id from list_videos."),
+        ["camera"] = Prop("string", "Restrict to one camera name."),
+        ["classes"] = JsonSerializer.SerializeToElement(new
+        {
+            type = "array", items = new { type = "string", @enum = CocoLabels.Names },
+            description = "COCO class names to look for, e.g. [\"car\",\"truck\"]. Omit for all classes.",
+        }),
+        ["from_seconds"] = Prop("number", "Only sightings at or after this many seconds into the video."),
+        ["to_seconds"] = Prop("number", "Only sightings at or before this many seconds into the video."),
+        ["from_time"] = Prop("string", "ISO 8601 wall-clock lower bound, e.g. 2026-09-22T18:00:00+05:30."),
+        ["to_time"] = Prop("string", "ISO 8601 wall-clock upper bound."),
+        ["min_confidence"] = Prop("number", "Drop detections below this confidence (0..1). Default 0.35."),
+    };
+
+    public static IReadOnlyList<ToolSpec> Specs { get; } =
     [
-        new Tool
-        {
-            Name = "list_videos",
-            Description = "List every indexed video with its camera name, duration, wall-clock start time and how many detections it holds. Call this first when you do not know what footage exists.",
-            InputSchema = new() { Properties = new Dictionary<string, JsonElement>(), Required = [] },
-        },
-        new Tool
-        {
-            Name = "search_detections",
-            Description = "Find sightings of object classes in the footage. Consecutive sightings of the same class within group_window_seconds are merged into one event with a start and end time, so the result is a list of events, not raw frames. Use it to answer 'when', 'show me' and 'was there' questions.",
-            InputSchema = new()
+        new("list_videos",
+            "List every indexed video with its camera name, duration, wall-clock start time and how many detections it holds. Call this first when you do not know what footage exists.",
+            new Dictionary<string, JsonElement>()),
+        new("search_detections",
+            "Find sightings of object classes in the footage. Consecutive sightings of the same class within group_window_seconds are merged into one event with a start and end time, so the result is a list of events, not raw frames. Use it to answer 'when', 'show me' and 'was there' questions.",
+            new Dictionary<string, JsonElement>(FilterProps)
             {
-                Properties = new Dictionary<string, JsonElement>
-                {
-                    ["video_id"] = Prop("integer", "Restrict to one video id from list_videos."),
-                    ["camera"] = Prop("string", "Restrict to one camera name."),
-                    ["classes"] = JsonSerializer.SerializeToElement(new
-                    {
-                        type = "array", items = new { type = "string", @enum = CocoLabels.Names },
-                        description = "COCO class names to look for, e.g. [\"car\",\"truck\"]. Omit for all classes.",
-                    }),
-                    ["from_seconds"] = Prop("number", "Only sightings at or after this many seconds into the video."),
-                    ["to_seconds"] = Prop("number", "Only sightings at or before this many seconds into the video."),
-                    ["from_time"] = Prop("string", "ISO 8601 wall-clock lower bound, e.g. 2026-09-22T18:00:00+05:30."),
-                    ["to_time"] = Prop("string", "ISO 8601 wall-clock upper bound."),
-                    ["min_confidence"] = Prop("number", "Drop detections below this confidence (0..1). Default 0.35."),
-                    ["min_area"] = Prop("number", "Drop boxes smaller than this fraction of the frame (0..1). Use ~0.01 to ignore distant objects."),
-                    ["group_window_seconds"] = Prop("number", "Merge sightings closer than this into one event. Default 2. Use 0 for raw per-frame rows."),
-                    ["limit"] = Prop("integer", "Maximum events to return, default 30, max 200."),
-                },
-                Required = [],
-            },
-        },
-        new Tool
-        {
-            Name = "count_detections",
-            Description = "Count sightings per class, or per time bucket when bucket_minutes is given. Counts are per sampled frame (2 frames per second), so 100 'car' counts could be one car parked for 50 seconds. For 'how many distinct' questions prefer search_detections and count the events.",
-            InputSchema = new()
+                ["min_area"] = Prop("number", "Drop boxes smaller than this fraction of the frame (0..1). Use ~0.01 to ignore distant objects."),
+                ["group_window_seconds"] = Prop("number", "Merge sightings closer than this into one event. Default 2. Use 0 for raw per-frame rows."),
+                ["limit"] = Prop("integer", "Maximum events to return, default 30, max 200."),
+            }),
+        new("count_detections",
+            "Count sightings per class, or per time bucket when bucket_minutes is given. Counts are per sampled frame (2 frames per second), so 100 'car' counts could be one car parked for 50 seconds. For 'how many distinct' questions prefer search_detections and count the events.",
+            new Dictionary<string, JsonElement>(FilterProps)
             {
-                Properties = new Dictionary<string, JsonElement>
-                {
-                    ["video_id"] = Prop("integer", "Restrict to one video id."),
-                    ["camera"] = Prop("string", "Restrict to one camera name."),
-                    ["classes"] = JsonSerializer.SerializeToElement(new
-                    {
-                        type = "array", items = new { type = "string", @enum = CocoLabels.Names },
-                        description = "Class names to count. Omit for all.",
-                    }),
-                    ["from_seconds"] = Prop("number", "Lower bound in seconds into the video."),
-                    ["to_seconds"] = Prop("number", "Upper bound in seconds into the video."),
-                    ["from_time"] = Prop("string", "ISO 8601 wall-clock lower bound."),
-                    ["to_time"] = Prop("string", "ISO 8601 wall-clock upper bound."),
-                    ["min_confidence"] = Prop("number", "Minimum confidence 0..1."),
-                    ["bucket_minutes"] = Prop("number", "If set, return counts per time bucket of this many minutes instead of totals."),
-                },
-                Required = [],
-            },
-        },
+                ["bucket_minutes"] = Prop("number", "If set, return counts per time bucket of this many minutes instead of totals."),
+            }),
     ];
+
+    /// <summary>The same tools in the Anthropic SDK's shape.</summary>
+    public static IReadOnlyList<Tool> Definitions { get; } = Specs.Select(t => new Tool
+    {
+        Name = t.Name,
+        Description = t.Description,
+        InputSchema = new() { Properties = new Dictionary<string, JsonElement>(t.Properties), Required = [] },
+    }).ToList();
 
     /// <summary>Runs a tool. Returns the JSON text for Claude and, for searches, the hits so the UI can render them.</summary>
     public async Task<(string Json, IReadOnlyList<DetectionHit> Hits)> ExecuteAsync(string name, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)
@@ -147,9 +137,7 @@ public sealed class AgentTools
     {
         VideoId = Int(input, "video_id"),
         Camera = Str(input, "camera"),
-        Classes = input.TryGetValue("classes", out var c) && c.ValueKind == JsonValueKind.Array
-            ? c.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => s.Length > 0).ToList()
-            : null,
+        Classes = Classes(input),
         FromSeconds = Num(input, "from_seconds"),
         ToSeconds = Num(input, "to_seconds"),
         FromTime = Time(input, "from_time"),
@@ -161,14 +149,35 @@ public sealed class AgentTools
     private static JsonElement Prop(string type, string description) =>
         JsonSerializer.SerializeToElement(new { type, description });
 
-    private static double? Num(IReadOnlyDictionary<string, JsonElement> d, string k) =>
-        d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
+    /// <summary>Accepts ["bus","car"], "bus,car" or "bus". Unknown names are dropped so a typo does not turn into an empty result silently elsewhere.</summary>
+    private static IReadOnlyList<string>? Classes(IReadOnlyDictionary<string, JsonElement> d)
+    {
+        if (!d.TryGetValue("classes", out var c)) return null;
+        IEnumerable<string> raw = c.ValueKind switch
+        {
+            JsonValueKind.Array => c.EnumerateArray().Select(e => e.ValueKind == JsonValueKind.String ? e.GetString() ?? "" : e.ToString()),
+            JsonValueKind.String => (c.GetString() ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            _ => [],
+        };
+        var list = raw.Select(x => x.Trim().ToLowerInvariant()).Where(x => x.Length > 0).Distinct().ToList();
+        return list.Count == 0 ? null : list;
+    }
 
-    private static int? Int(IReadOnlyDictionary<string, JsonElement> d, string k) =>
-        d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.Number ? (int)v.GetDouble() : null;
+    private static double? Num(IReadOnlyDictionary<string, JsonElement> d, string k)
+    {
+        if (!d.TryGetValue(k, out var v)) return null;
+        return v.ValueKind switch
+        {
+            JsonValueKind.Number => v.GetDouble(),
+            JsonValueKind.String when double.TryParse(v.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var n) => n,
+            _ => null,
+        };
+    }
+
+    private static int? Int(IReadOnlyDictionary<string, JsonElement> d, string k) => Num(d, k) is { } n ? (int)n : null;
 
     private static string? Str(IReadOnlyDictionary<string, JsonElement> d, string k) =>
-        d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        d.TryGetValue(k, out var v) && v.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(v.GetString()) ? v.GetString() : null;
 
     private static DateTimeOffset? Time(IReadOnlyDictionary<string, JsonElement> d, string k) =>
         Str(d, k) is { } s && DateTimeOffset.TryParse(s, out var t) ? t : null;
